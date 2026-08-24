@@ -8,15 +8,36 @@
 #include "Pet.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
+#include "Chat.h"
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 class npc_warlock_pet_renamer : public CreatureScript
 {
 private:
     static constexpr int VISUAL_FEEDBACK_SPELL_ID = 46331;
+    static constexpr int64 RENAME_COOLDOWN_SECONDS = 30;
+
+    static std::unordered_map<uint64, int64> _lastRenameByPlayer;
+    static std::mutex _renameMutex;
+
+    static bool IsOnCooldown(Player* player)
+    {
+        int64 now = GameTime::GetGameTime().count();
+        std::lock_guard<std::mutex> lock(_renameMutex);
+        auto it = _lastRenameByPlayer.find(player->GetGUID().GetCounter());
+        return it != _lastRenameByPlayer.end() && (now - it->second) < RENAME_COOLDOWN_SECONDS;
+    }
+
+    static void RecordRename(Player* player)
+    {
+        std::lock_guard<std::mutex> lock(_renameMutex);
+        _lastRenameByPlayer[player->GetGUID().GetCounter()] = GameTime::GetGameTime().count();
+    }
 
     static Pet* GetAllowedPetForRename(Player* player)
     {
@@ -44,6 +65,12 @@ private:
         Pet* pet = GetAllowedPetForRename(player);
         if (!pet)
             return;
+
+        if (IsOnCooldown(player))
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("You must wait a moment before renaming your pet again.");
+            return;
+        }
 
         if (!nameStr)
             return;
@@ -82,7 +109,11 @@ private:
         stmt->SetData(2, pet->GetCharmInfo()->GetPetNumber());
         CharacterDatabase.Execute(stmt);
 
-        pet->SetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP, uint32(GameTime::GetGameTime().count())); // cast can't be helped
+        RecordRename(player);
+
+        // UNIT_FIELD_PET_NAME_TIMESTAMP is a 32-bit protocol field and cannot be widened;
+        // the per-player cooldown above uses 64-bit time, so rate limiting stays correct past 2038.
+        pet->SetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP, uint32(GameTime::GetGameTime().count()));
     }
 
     static std::string GetPetInfo(const Pet* pet)
@@ -167,6 +198,9 @@ public:
         return true;
     }
 };
+
+std::unordered_map<uint64, int64> npc_warlock_pet_renamer::_lastRenameByPlayer;
+std::mutex npc_warlock_pet_renamer::_renameMutex;
 
 void AddSC_npc_warlock_pet_renamer()
 {
