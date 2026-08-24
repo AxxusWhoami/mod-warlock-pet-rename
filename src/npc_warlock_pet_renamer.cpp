@@ -107,8 +107,15 @@ private:
         if (!pet)
             return;
 
+        // Revalidate against the current pet: the player may have swapped pets
+        // between typing the name and confirming, or the reserved/profane lists
+        // may have been updated in the meantime.
+        std::string validatedName = name;
+        if (!ValidateProposedName(player, pet, validatedName))
+            return;
+
         std::string oldName = pet->GetName();
-        if (oldName == name)
+        if (oldName == validatedName)
             return;
 
         if (player->GetMoney() < RENAME_COST_COPPER)
@@ -117,6 +124,8 @@ private:
             return;
         }
 
+        // Cooldown is consumed only after all validations pass, so a failed
+        // rename does not leave the player locked out for 30 seconds.
         if (!TryStartRename(player))
         {
             ChatHandler(player->GetSession()).SendSysMessage("You must wait a moment before renaming your pet again.");
@@ -126,17 +135,20 @@ private:
         uint32 petNumber = pet->GetCharmInfo()->GetPetNumber();
 
         player->ModifyMoney(-static_cast<int32>(RENAME_COST_COPPER));
-        pet->SetName(name);
+        pet->SetName(validatedName);
         player->CastSpell(pet, VISUAL_FEEDBACK_SPELL_ID, true);
 
+        // DirectExecute blocks until the DB write completes, keeping the gold
+        // deduction and the pet name persistence in lockstep. A crash between
+        // the two would otherwise let the player lose gold without the rename.
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_PET_NAME);
-        stmt->SetData(0, name);
+        stmt->SetData(0, validatedName);
         stmt->SetData(1, player->GetGUID().GetCounter());
         stmt->SetData(2, petNumber);
-        CharacterDatabase.Execute(stmt);
+        CharacterDatabase.DirectExecute(stmt);
 
         LOG_DEBUG("entities.pet.renamer", "Player {} renamed pet #{} from '{}' to '{}' for 15 gold",
-            player->GetName(), petNumber, oldName, name);
+            player->GetName(), petNumber, oldName, validatedName);
 
         // UNIT_FIELD_PET_NAME_TIMESTAMP is a 32-bit protocol field and cannot be widened;
         // the per-player cooldown above uses 64-bit time, so rate limiting stays correct past 2038.
@@ -178,12 +190,15 @@ public:
     {
     }
 
+    static void ClearProposedName(uint64 guid)
+    {
+        std::lock_guard<std::mutex> lock(_renameMutex);
+        _proposedName.erase(guid);
+    }
+
     bool OnGossipHello(Player* player, Creature* creature) override
     {
-        {
-            std::lock_guard<std::mutex> lock(_renameMutex);
-            _proposedName.erase(player->GetGUID().GetCounter());
-        }
+        ClearProposedName(player->GetGUID().GetCounter());
 
         if (player->getClass() != CLASS_WARLOCK)
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "|cffb50505WARLOCKS ONLY|r", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
@@ -238,8 +253,7 @@ public:
         }
         else if (action == GOSSIP_ACTION_INFO_DEF + 5)
         {
-            std::lock_guard<std::mutex> lock(_renameMutex);
-            _proposedName.erase(player->GetGUID().GetCounter());
+            ClearProposedName(player->GetGUID().GetCounter());
             CloseGossipMenuFor(player);
             return true;
         }
@@ -295,6 +309,19 @@ public:
     }
 };
 
+class WarlockPetRenamerPlayerScript : public PlayerScript
+{
+public:
+    WarlockPetRenamerPlayerScript() : PlayerScript("WarlockPetRenamerPlayerScript")
+    {
+    }
+
+    void OnLogout(Player* player) override
+    {
+        npc_warlock_pet_renamer::ClearProposedName(player->GetGUID().GetCounter());
+    }
+};
+
 std::unordered_map<uint64, int64> npc_warlock_pet_renamer::_lastRenameByPlayer;
 std::unordered_map<uint64, std::string> npc_warlock_pet_renamer::_proposedName;
 std::mutex npc_warlock_pet_renamer::_renameMutex;
@@ -302,4 +329,5 @@ std::mutex npc_warlock_pet_renamer::_renameMutex;
 void AddSC_npc_warlock_pet_renamer()
 {
     new npc_warlock_pet_renamer();
+    new WarlockPetRenamerPlayerScript();
 }
