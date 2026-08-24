@@ -45,11 +45,8 @@ private:
         if (!pet)
             return;
 
-        if (!nameStr || !*nameStr)
-        {
-            player->GetSession()->SendPetNameInvalid(PET_NAME_TOO_SHORT, "", nullptr);
+        if (!nameStr)
             return;
-        }
 
         std::string name(nameStr);
         NormalizeName(name);
