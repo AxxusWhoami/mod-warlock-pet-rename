@@ -1,0 +1,26 @@
+###############################################
+# Warlock Pet Rename configuration file
+###############################################
+
+########################################
+# Cost in copper to rename a pet
+# Range: 0 - 2147483647
+# Default: 150000 (15 gold)
+########################################
+
+WarlockPetRename.CostCopper = 150000
+
+########################################
+# Cooldown in seconds between renames per player
+# Range: 0 - 86400
+# Default: 30
+########################################
+
+WarlockPetRename.CooldownSeconds = 30
+
+########################################
+# Spell ID cast on the pet as visual feedback after rename
+# Default: 46331 ( cosmetic visual )
+########################################
+
+WarlockPetRename.VisualFeedbackSpellId = 46331

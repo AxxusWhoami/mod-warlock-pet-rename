@@ -11,6 +11,7 @@
 #include "Chat.h"
 #include "Log.h"
 #include "ObjectMgr.h"
+#include "Config.h"
 
 #include <algorithm>
 #include <cctype>
@@ -21,9 +22,9 @@
 class npc_warlock_pet_renamer : public CreatureScript
 {
 private:
-    static constexpr int VISUAL_FEEDBACK_SPELL_ID = 46331;
-    static constexpr int64 RENAME_COOLDOWN_SECONDS = 30;
-    static constexpr uint32 RENAME_COST_COPPER = 15 * 10000;
+    static constexpr int DEFAULT_VISUAL_FEEDBACK_SPELL_ID = 46331;
+    static constexpr int64 DEFAULT_RENAME_COOLDOWN_SECONDS = 30;
+    static constexpr uint32 DEFAULT_RENAME_COST_COPPER = 15 * 10000;
 
     // module_string IDs (see data/sql/db-world/updates/WPR_2024_03_28_01.sql)
     enum ModuleStringId
@@ -54,10 +55,52 @@ private:
     static std::unordered_map<uint64, std::string> _proposedName;
     static std::mutex _renameMutex;
 
+    static int32 GetVisualFeedbackSpellId()
+    {
+        return sConfigMgr->GetOption<int32>("WarlockPetRename.VisualFeedbackSpellId", DEFAULT_VISUAL_FEEDBACK_SPELL_ID);
+    }
+
+    static int64 GetRenameCooldownSeconds()
+    {
+        return sConfigMgr->GetOption<int64>("WarlockPetRename.CooldownSeconds", DEFAULT_RENAME_COOLDOWN_SECONDS);
+    }
+
+    static uint32 GetRenameCostCopper()
+    {
+        return sConfigMgr->GetOption<uint32>("WarlockPetRename.CostCopper", DEFAULT_RENAME_COST_COPPER);
+    }
+
     static std::string GetModuleString(uint32 id, Player* player = nullptr)
     {
-        uint32 locale = player ? player->GetSession()->GetSessionDbLocaleIndex() : DEFAULT_LOCALE;
-        return sObjectMgr->GetAcoreStringForModule(MODULE_NAME, id, locale);
+        int32 locale = player ? player->GetSession()->GetSessionDbLocaleIndex() : sObjectMgr->GetDBCLocaleIndex();
+        std::string str = sObjectMgr->GetModuleString(MODULE_NAME, id, LocaleConstant(locale));
+        if (str.empty())
+            str = sObjectMgr->GetModuleString(MODULE_NAME, id, LOCALE_enUS);
+        return str;
+    }
+
+    static std::string FormatCost(uint32 costCopper)
+    {
+        uint32 gold = costCopper / 10000;
+        uint32 silver = (costCopper % 10000) / 100;
+        uint32 copper = costCopper % 100;
+
+        std::string result;
+        if (gold > 0)
+            result += std::to_string(gold) + " Gold";
+        if (silver > 0)
+        {
+            if (!result.empty())
+                result += " ";
+            result += std::to_string(silver) + " Silver";
+        }
+        if (copper > 0 || result.empty())
+        {
+            if (!result.empty())
+                result += " ";
+            result += std::to_string(copper) + " Copper";
+        }
+        return result;
     }
 
     static std::string GetModuleStringFmt(uint32 id, Player* player, const std::string& arg)
@@ -66,6 +109,20 @@ private:
         size_t pos = fmt.find("{}");
         if (pos != std::string::npos)
             fmt.replace(pos, 2, arg);
+        return fmt;
+    }
+
+    static std::string GetModuleStringFmt2(uint32 id, Player* player, const std::string& arg1, const std::string& arg2)
+    {
+        std::string fmt = GetModuleString(id, player);
+        size_t pos = fmt.find("{}");
+        if (pos != std::string::npos)
+        {
+            fmt.replace(pos, 2, arg1);
+            pos = fmt.find("{}", pos + arg1.size());
+            if (pos != std::string::npos)
+                fmt.replace(pos, 2, arg2);
+        }
         return fmt;
     }
 
@@ -78,7 +135,7 @@ private:
 
         for (auto it = _lastRenameByPlayer.begin(); it != _lastRenameByPlayer.end(); )
         {
-            if ((now - it->second) >= RENAME_COOLDOWN_SECONDS)
+            if ((now - it->second) >= GetRenameCooldownSeconds())
                 it = _lastRenameByPlayer.erase(it);
             else
                 ++it;
@@ -90,6 +147,13 @@ private:
 
         _lastRenameByPlayer[playerGuid] = now;
         return true;
+    }
+
+    static void ClearRenameCooldown(Player* player)
+    {
+        uint64 playerGuid = player->GetGUID().GetCounter();
+        std::lock_guard<std::mutex> lock(_renameMutex);
+        _lastRenameByPlayer.erase(playerGuid);
     }
 
     static Pet* GetAllowedPetForRename(Player* player)
@@ -156,32 +220,30 @@ private:
         if (oldName == validatedName)
             return;
 
-        if (player->GetMoney() < RENAME_COST_COPPER)
-        {
-            ChatHandler(player->GetSession()).SendSysMessage(GetModuleString(STR_NOT_ENOUGH_GOLD, player));
-            return;
-        }
+        uint32 costCopper = GetRenameCostCopper();
 
-        if (!TryStartRename(player))
+        if (player->GetMoney() < costCopper)
         {
-            ChatHandler(player->GetSession()).SendSysMessage(GetModuleString(STR_COOLDOWN, player));
+            ChatHandler(player->GetSession()).SendSysMessage(GetModuleStringFmt(STR_NOT_ENOUGH_GOLD, player, FormatCost(costCopper)));
             return;
         }
 
         uint32 petNumber = pet->GetCharmInfo()->GetPetNumber();
 
-        player->ModifyMoney(-static_cast<int32>(RENAME_COST_COPPER));
-        pet->SetName(validatedName);
-        player->CastSpell(pet, VISUAL_FEEDBACK_SPELL_ID, true);
-
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_PET_NAME);
         stmt->SetData(0, validatedName);
         stmt->SetData(1, player->GetGUID().GetCounter());
         stmt->SetData(2, petNumber);
-        CharacterDatabase.DirectExecute(stmt);
+        CharacterDatabase.Execute(stmt);
 
-        LOG_DEBUG("entities.pet.renamer", "Player {} renamed pet #{} from '{}' to '{}' for 15 gold",
-            player->GetName(), petNumber, oldName, validatedName);
+        player->ModifyMoney(-static_cast<int32>(costCopper));
+        pet->SetName(validatedName);
+        player->CastSpell(pet, GetVisualFeedbackSpellId(), true);
+
+        TryStartRename(player);
+
+        LOG_DEBUG("entities.pet.renamer", "Player {} renamed pet #{} from '{}' to '{}' for {} copper",
+            player->GetName(), petNumber, oldName, validatedName, costCopper);
 
         pet->SetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP, uint32(GameTime::GetGameTime().count()));
     }
@@ -238,7 +300,7 @@ public:
             else
             {
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleStringFmt(STR_CURRENT_PET, player, GetPetInfo(pet, player)), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
-                AddGossipItemFor(player, GOSSIP_ICON_TALK, GetModuleString(STR_RENAME_PET, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 3, GetModuleString(STR_RENAME_POPUP, player), 0, true);
+                AddGossipItemFor(player, GOSSIP_ICON_TALK, GetModuleStringFmt(STR_RENAME_PET, player, FormatCost(GetRenameCostCopper())), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 3, GetModuleStringFmt(STR_RENAME_POPUP, player, FormatCost(GetRenameCostCopper())), 0, true);
             }
         }
 
@@ -326,7 +388,7 @@ public:
             }
 
             ClearGossipMenuFor(player);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleStringFmt(STR_CONFIRM_RENAME, player, name), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 4);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleStringFmt2(STR_CONFIRM_RENAME, player, name, FormatCost(GetRenameCostCopper())), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 4);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleString(STR_CANCEL, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 5);
             SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
             return true;
