@@ -1,6 +1,6 @@
 SET @Entry = 200002;
-SET @Name = "Lucius Sombra";
-SET @Subname = "Rename Master";
+SET @Name = "Funcionario Pútrido";
+SET @Subname = "Registro civil de demonios";
 
 START TRANSACTION;
 
@@ -50,14 +50,14 @@ ON DUPLICATE KEY UPDATE
 -- Locales: koKR, frFR, deDE, zhCN, zhTW, esES, esMX, ruRU
 DELETE FROM `creature_template_locale` WHERE `entry` = @Entry;
 INSERT INTO `creature_template_locale` (`entry`, `locale`, `Name`, `Title`, `VerifiedBuild`) VALUES
-(@Entry, 'koKR', '루시우스 솜브라', '이름 변경 대가', 0),
-(@Entry, 'frFR', 'Lucius Sombra', 'Maître des renoms', 0),
-(@Entry, 'deDE', 'Lucius Sombra', 'Meister der Umbenennung', 0),
-(@Entry, 'zhCN', '卢修斯·索姆布拉', '改名大师', 0),
-(@Entry, 'zhTW', '盧修斯·索姆布拉', '改名大師', 0),
-(@Entry, 'esES', 'Lucius Sombra', 'Maestro de renombre', 0),
-(@Entry, 'esMX', 'Lucius Sombra', 'Maestro de renombre', 0),
-(@Entry, 'ruRU', 'Люций Сомбра', 'Мастер переименования', 0)
+(@Entry, 'koKR', '부패한 관리', '악마 호적 사무소', 0),
+(@Entry, 'frFR', 'Fonctionnaire Putride', 'Registre civil des démons', 0),
+(@Entry, 'deDE', 'Fauliger Beamter', 'Standesamt für Dämonen', 0),
+(@Entry, 'zhCN', '腐朽官员', '恶魔户籍登记处', 0),
+(@Entry, 'zhTW', '腐朽官員', '惡魔戶籍登記處', 0),
+(@Entry, 'esES', 'Funcionario Pútrido', 'Registro civil de demonios', 0),
+(@Entry, 'esMX', 'Funcionario Pútrido', 'Registro civil de demonios', 0),
+(@Entry, 'ruRU', 'Гнилостный Чиновник', 'Реестр демонов', 0)
 ON DUPLICATE KEY UPDATE
     `Name` = VALUES(`Name`),
     `Title` = VALUES(`Title`),
