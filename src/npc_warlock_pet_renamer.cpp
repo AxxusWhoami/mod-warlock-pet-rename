@@ -9,6 +9,10 @@
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+
 class npc_warlock_pet_renamer : public CreatureScript
 {
 private:
@@ -25,15 +29,27 @@ private:
 
     static void NormalizeName(std::string& name)
     {
-        std::transform(name.begin(), name.end(), name.begin(), tolower);
-        name[0] = std::toupper(name[0]);
+        if (name.empty())
+            return;
+
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+        name[0] = std::toupper(static_cast<unsigned char>(name[0]));
     }
 
     static void HandlePetRename(Player* player, const char* nameStr)
     {
+        if (player->getClass() != CLASS_WARLOCK)
+            return;
+
         Pet* pet = GetAllowedPetForRename(player);
         if (!pet)
             return;
+
+        if (!nameStr || !*nameStr)
+        {
+            player->GetSession()->SendPetNameInvalid(PET_NAME_TOO_SHORT, "", nullptr);
+            return;
+        }
 
         std::string name(nameStr);
         NormalizeName(name);
@@ -56,6 +72,9 @@ private:
             player->GetSession()->SendPetNameInvalid(PET_NAME_PROFANE, name, nullptr);
             return;
         }
+
+        if (pet->GetName() == name)
+            return;
 
         pet->SetName(name);
         player->CastSpell(pet, VISUAL_FEEDBACK_SPELL_ID, true);
