@@ -9,6 +9,7 @@
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Chat.h"
+#include "Log.h"
 
 #include <algorithm>
 #include <cctype>
@@ -25,18 +26,27 @@ private:
     static std::unordered_map<uint64, int64> _lastRenameByPlayer;
     static std::mutex _renameMutex;
 
-    static bool IsOnCooldown(Player* player)
+    static bool TryStartRename(Player* player)
     {
         int64 now = GameTime::GetGameTime().count();
-        std::lock_guard<std::mutex> lock(_renameMutex);
-        auto it = _lastRenameByPlayer.find(player->GetGUID().GetCounter());
-        return it != _lastRenameByPlayer.end() && (now - it->second) < RENAME_COOLDOWN_SECONDS;
-    }
+        uint64 playerGuid = player->GetGUID().GetCounter();
 
-    static void RecordRename(Player* player)
-    {
         std::lock_guard<std::mutex> lock(_renameMutex);
-        _lastRenameByPlayer[player->GetGUID().GetCounter()] = GameTime::GetGameTime().count();
+
+        for (auto it = _lastRenameByPlayer.begin(); it != _lastRenameByPlayer.end(); )
+        {
+            if ((now - it->second) >= RENAME_COOLDOWN_SECONDS)
+                it = _lastRenameByPlayer.erase(it);
+            else
+                ++it;
+        }
+
+        auto it = _lastRenameByPlayer.find(playerGuid);
+        if (it != _lastRenameByPlayer.end())
+            return false;
+
+        _lastRenameByPlayer[playerGuid] = now;
+        return true;
     }
 
     static Pet* GetAllowedPetForRename(Player* player)
@@ -66,7 +76,7 @@ private:
         if (!pet)
             return;
 
-        if (IsOnCooldown(player))
+        if (!TryStartRename(player))
         {
             ChatHandler(player->GetSession()).SendSysMessage("You must wait a moment before renaming your pet again.");
             return;
@@ -97,8 +107,11 @@ private:
             return;
         }
 
-        if (pet->GetName() == name)
+        std::string oldName = pet->GetName();
+        if (oldName == name)
             return;
+
+        uint32 petNumber = pet->GetCharmInfo()->GetPetNumber();
 
         pet->SetName(name);
         player->CastSpell(pet, VISUAL_FEEDBACK_SPELL_ID, true);
@@ -106,10 +119,11 @@ private:
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_PET_NAME);
         stmt->SetData(0, name);
         stmt->SetData(1, player->GetGUID().GetCounter());
-        stmt->SetData(2, pet->GetCharmInfo()->GetPetNumber());
+        stmt->SetData(2, petNumber);
         CharacterDatabase.Execute(stmt);
 
-        RecordRename(player);
+        LOG_DEBUG("entities.pet.renamer", "Player {} renamed pet #{} from '{}' to '{}'",
+            player->GetName(), petNumber, oldName, name);
 
         // UNIT_FIELD_PET_NAME_TIMESTAMP is a 32-bit protocol field and cannot be widened;
         // the per-player cooldown above uses 64-bit time, so rate limiting stays correct past 2038.
