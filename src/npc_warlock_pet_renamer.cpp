@@ -10,6 +10,7 @@
 #include "GameTime.h"
 #include "Chat.h"
 #include "Log.h"
+#include "ObjectMgr.h"
 
 #include <algorithm>
 #include <cctype>
@@ -24,9 +25,49 @@ private:
     static constexpr int64 RENAME_COOLDOWN_SECONDS = 30;
     static constexpr uint32 RENAME_COST_COPPER = 15 * 10000;
 
+    // module_string IDs (see data/sql/db-world/updates/WPR_2024_03_28_01.sql)
+    enum ModuleStringId
+    {
+        STR_WARLOCKS_ONLY            = 1,
+        STR_SUMMON_PET               = 2,
+        STR_CURRENT_PET              = 3,
+        STR_RENAME_PET               = 4,
+        STR_RENAME_POPUP             = 5,
+        STR_NEVERMIND                = 6,
+        STR_CONFIRM_RENAME           = 7,
+        STR_CANCEL                   = 8,
+        STR_NOT_ENOUGH_GOLD          = 9,
+        STR_COOLDOWN                 = 10,
+        STR_PET_TYPE_INFERNAL        = 11,
+        STR_PET_TYPE_IMP             = 12,
+        STR_PET_TYPE_FELHUNTER       = 13,
+        STR_PET_TYPE_VOIDWALKER      = 14,
+        STR_PET_TYPE_SUCCUBUS        = 15,
+        STR_PET_TYPE_DOOMGUARD       = 16,
+        STR_PET_TYPE_FELGUARD        = 17,
+        STR_PET_TYPE_UNKNOWN         = 18,
+    };
+
+    static constexpr const char* MODULE_NAME = "mod-warlock-pet-rename";
+
     static std::unordered_map<uint64, int64> _lastRenameByPlayer;
     static std::unordered_map<uint64, std::string> _proposedName;
     static std::mutex _renameMutex;
+
+    static std::string GetModuleString(uint32 id, Player* player = nullptr)
+    {
+        uint32 locale = player ? player->GetSession()->GetSessionDbLocaleIndex() : DEFAULT_LOCALE;
+        return sObjectMgr->GetAcoreStringForModule(MODULE_NAME, id, locale);
+    }
+
+    static std::string GetModuleStringFmt(uint32 id, Player* player, const std::string& arg)
+    {
+        std::string fmt = GetModuleString(id, player);
+        size_t pos = fmt.find("{}");
+        if (pos != std::string::npos)
+            fmt.replace(pos, 2, arg);
+        return fmt;
+    }
 
     static bool TryStartRename(Player* player)
     {
@@ -107,9 +148,6 @@ private:
         if (!pet)
             return;
 
-        // Revalidate against the current pet: the player may have swapped pets
-        // between typing the name and confirming, or the reserved/profane lists
-        // may have been updated in the meantime.
         std::string validatedName = name;
         if (!ValidateProposedName(player, pet, validatedName))
             return;
@@ -120,15 +158,13 @@ private:
 
         if (player->GetMoney() < RENAME_COST_COPPER)
         {
-            ChatHandler(player->GetSession()).SendSysMessage("You don't have enough gold. The rename costs 15 Gold.");
+            ChatHandler(player->GetSession()).SendSysMessage(GetModuleString(STR_NOT_ENOUGH_GOLD, player));
             return;
         }
 
-        // Cooldown is consumed only after all validations pass, so a failed
-        // rename does not leave the player locked out for 30 seconds.
         if (!TryStartRename(player))
         {
-            ChatHandler(player->GetSession()).SendSysMessage("You must wait a moment before renaming your pet again.");
+            ChatHandler(player->GetSession()).SendSysMessage(GetModuleString(STR_COOLDOWN, player));
             return;
         }
 
@@ -138,9 +174,6 @@ private:
         pet->SetName(validatedName);
         player->CastSpell(pet, VISUAL_FEEDBACK_SPELL_ID, true);
 
-        // DirectExecute blocks until the DB write completes, keeping the gold
-        // deduction and the pet name persistence in lockstep. A crash between
-        // the two would otherwise let the player lose gold without the rename.
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_PET_NAME);
         stmt->SetData(0, validatedName);
         stmt->SetData(1, player->GetGUID().GetCounter());
@@ -150,40 +183,35 @@ private:
         LOG_DEBUG("entities.pet.renamer", "Player {} renamed pet #{} from '{}' to '{}' for 15 gold",
             player->GetName(), petNumber, oldName, validatedName);
 
-        // UNIT_FIELD_PET_NAME_TIMESTAMP is a 32-bit protocol field and cannot be widened;
-        // the per-player cooldown above uses 64-bit time, so rate limiting stays correct past 2038.
         pet->SetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP, uint32(GameTime::GetGameTime().count()));
     }
 
-    static std::string GetPetInfo(const Pet* pet)
+    static std::string GetPetTypeString(const Pet* pet, Player* player)
     {
-        std::string type = "unknown";
         switch (pet->GetEntry())
         {
             case NPC_INFERNAL:
-                type = "infernal";
-                break;
+                return GetModuleString(STR_PET_TYPE_INFERNAL, player);
             case NPC_IMP:
-                type = "imp";
-                break;
+                return GetModuleString(STR_PET_TYPE_IMP, player);
             case NPC_FELHUNTER:
-                type = "felhunter";
-                break;
+                return GetModuleString(STR_PET_TYPE_FELHUNTER, player);
             case NPC_VOIDWALKER:
-                type = "voidwalker";
-                break;
+                return GetModuleString(STR_PET_TYPE_VOIDWALKER, player);
             case NPC_SUCCUBUS:
-                type = "succubus";
-                break;
+                return GetModuleString(STR_PET_TYPE_SUCCUBUS, player);
             case NPC_DOOMGUARD:
-                type = "doomguard";
-                break;
+                return GetModuleString(STR_PET_TYPE_DOOMGUARD, player);
             case NPC_FELGUARD:
-                type = "felguard";
-                break;
+                return GetModuleString(STR_PET_TYPE_FELGUARD, player);
+            default:
+                return GetModuleString(STR_PET_TYPE_UNKNOWN, player);
         }
+    }
 
-        return pet->GetName() + " (" + type + ")";
+    static std::string GetPetInfo(const Pet* pet, Player* player)
+    {
+        return pet->GetName() + " (" + GetPetTypeString(pet, player) + ")";
     }
 public:
     npc_warlock_pet_renamer() : CreatureScript("npc_warlock_pet_renamer")
@@ -201,20 +229,20 @@ public:
         ClearProposedName(player->GetGUID().GetCounter());
 
         if (player->getClass() != CLASS_WARLOCK)
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "|cffb50505WARLOCKS ONLY|r", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleString(STR_WARLOCKS_ONLY, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
         else
         {
             Pet* pet = GetAllowedPetForRename(player);
             if (!pet)
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "|cffb50505PLEASE SUMMON YOUR PET|r", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleString(STR_SUMMON_PET, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
             else
             {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Current pet: " + GetPetInfo(pet), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
-                AddGossipItemFor(player, GOSSIP_ICON_TALK, "Rename current pet (15 Gold)", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 3, "Type in your desired pet name in the next popup! Cost: 15 Gold", 0, true);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleStringFmt(STR_CURRENT_PET, player, GetPetInfo(pet, player)), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
+                AddGossipItemFor(player, GOSSIP_ICON_TALK, GetModuleString(STR_RENAME_PET, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 3, GetModuleString(STR_RENAME_POPUP, player), 0, true);
             }
         }
 
-        AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Nevermind...", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleString(STR_NEVERMIND, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
         SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
         return true;
     }
@@ -298,8 +326,8 @@ public:
             }
 
             ClearGossipMenuFor(player);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Confirm: Rename pet to '" + name + "' for 15 Gold?", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 4);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Cancel", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 5);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleStringFmt(STR_CONFIRM_RENAME, player, name), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 4);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, GetModuleString(STR_CANCEL, player), GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 5);
             SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
             return true;
         }
