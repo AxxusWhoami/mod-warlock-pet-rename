@@ -73,10 +73,14 @@ private:
     static std::string GetModuleString(uint32 id, Player* player = nullptr)
     {
         int32 locale = player ? player->GetSession()->GetSessionDbLocaleIndex() : sObjectMgr->GetDBCLocaleIndex();
-        std::string str = sObjectMgr->GetModuleString(MODULE_NAME, id, LocaleConstant(locale));
-        if (str.empty())
-            str = sObjectMgr->GetModuleString(MODULE_NAME, id, LOCALE_enUS);
-        return str;
+        if (const std::string* str = sObjectMgr->GetModuleString(MODULE_NAME, id, LocaleConstant(locale)))
+            if (!str->empty())
+                return *str;
+
+        if (const std::string* fallback = sObjectMgr->GetModuleString(MODULE_NAME, id, LOCALE_enUS))
+            return *fallback;
+
+        return "";
     }
 
     static std::string FormatCost(uint32 costCopper)
@@ -406,7 +410,7 @@ public:
     {
     }
 
-    void OnLogout(Player* player) override
+    void OnPlayerBeforeLogout(Player* player) override
     {
         npc_warlock_pet_renamer::ClearProposedName(player->GetGUID().GetCounter());
     }
