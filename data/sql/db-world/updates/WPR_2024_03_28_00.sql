@@ -1,11 +1,12 @@
 SET @Entry = 200002;
-SET @Name = "Rename";
-SET @Subname = "Warlock Pets";
+SET @Name = "Lucius Sombra";
+SET @Subname = "Rename Master";
 
 START TRANSACTION;
 
 DELETE FROM `creature_template_model` WHERE `CreatureID` = @Entry;
 DELETE FROM `creature_template` WHERE `entry` = @Entry;
+DELETE FROM `creature_template_locale` WHERE `entry` = @Entry;
 
 INSERT INTO `creature_template` (`entry`, `name`, `subname`, `IconName`, `gossip_menu_id`, `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `rank`, `dmgschool`, `baseattacktime`, `rangeattacktime`, `unit_class`, `unit_flags`, `type`, `type_flags`, `lootid`, `pickpocketloot`, `skinloot`, `AIName`, `MovementType`, `HoverHeight`, `RacialLeader`, `movementId`, `RegenHealth`, `flags_extra`, `ScriptName`) VALUES
 (@Entry, @Name, @Subname, null, 0, 80, 80, 2, 35, 1, 0, 0, 2000, 0, 1, 2147483648, 7, 138936390, 0, 0, 0, '', 0, 1, 0, 0, 1, 0, 'npc_warlock_pet_renamer')
@@ -44,6 +45,22 @@ ON DUPLICATE KEY UPDATE
     `CreatureDisplayID` = VALUES(`CreatureDisplayID`),
     `DisplayScale` = VALUES(`DisplayScale`),
     `Probability` = VALUES(`Probability`),
+    `VerifiedBuild` = VALUES(`VerifiedBuild`);
+
+-- Locales: koKR, frFR, deDE, zhCN, zhTW, esES, esMX, ruRU
+DELETE FROM `creature_template_locale` WHERE `entry` = @Entry;
+INSERT INTO `creature_template_locale` (`entry`, `locale`, `Name`, `Title`, `VerifiedBuild`) VALUES
+(@Entry, 'koKR', '루시우스 솜브라', '이름 변경 대가', 0),
+(@Entry, 'frFR', 'Lucius Sombra', 'Maître des renoms', 0),
+(@Entry, 'deDE', 'Lucius Sombra', 'Meister der Umbenennung', 0),
+(@Entry, 'zhCN', '卢修斯·索姆布拉', '改名大师', 0),
+(@Entry, 'zhTW', '盧修斯·索姆布拉', '改名大師', 0),
+(@Entry, 'esES', 'Lucius Sombra', 'Maestro de renombre', 0),
+(@Entry, 'esMX', 'Lucius Sombra', 'Maestro de renombre', 0),
+(@Entry, 'ruRU', 'Люций Сомбра', 'Мастер переименования', 0)
+ON DUPLICATE KEY UPDATE
+    `Name` = VALUES(`Name`),
+    `Title` = VALUES(`Title`),
     `VerifiedBuild` = VALUES(`VerifiedBuild`);
 
 COMMIT;
